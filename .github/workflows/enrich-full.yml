@@ -1,0 +1,136 @@
+name: Ingredient Enrichment (Full Regeneration)
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_provider:
+        description: 'LLM Provider'
+        required: true
+        default: 'openrouter'
+        type: choice
+        options:
+          - openrouter
+          - anthropic
+      model_quality:
+        description: 'Model (OpenRouter only)'
+        required: false
+        default: 'haiku'
+        type: choice
+        options:
+          - haiku
+          - sonnet
+  schedule:
+    - cron: '0 2 * * 0'   # primer domingo de cada mes, 2am UTC
+
+permissions:
+  contents: read
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      fail-fast: false
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: 10
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install requests supabase
+
+      - name: Check secrets
+        run: |
+          if [ -z "$SUPABASE_PROJECT_ID" ]; then echo "❌ Missing SUPABASE_PROJECT_ID"; exit 1; fi
+          if [ -z "$SUPABASE_SECRET_KEY" ]; then echo "❌ Missing SUPABASE_SECRET_KEY"; exit 1; fi
+          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then echo "❌ Missing API key"; exit 1; fi
+          echo "✅ Secrets OK — shard ${{ matrix.shard }}/10"
+
+      - name: Run enrichment (shard ${{ matrix.shard }})
+        working-directory: repo
+        run: |
+          echo "🚀 Shard ${{ matrix.shard }}/10 starting..."
+          python scripts/enrich_ingredients_v3_openrouter.py
+          echo "✅ Shard ${{ matrix.shard }} done"
+
+      - name: Upload shard artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            repo/scripts/ingredients_enriched_v3_shard_${{ matrix.shard }}.jsonl
+            repo/scripts/overrides_log_shard_${{ matrix.shard }}.jsonl
+          if-no-files-found: warn
+          retention-days: 3
+
+  merge-and-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: enrich
+    if: always()
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      INPUT_FILE: ingredients_enriched_v3.jsonl
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: pip install supabase
+
+      - name: Download all shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: shards/
+          pattern: shard-*
+
+      - name: Merge shards
+        run: |
+          cat shards/shard-*/ingredients_enriched_v3_shard_*.jsonl > ingredients_enriched_v3.jsonl 2>/dev/null || true
+          cat shards/shard-*/overrides_log_shard_*.jsonl > overrides_log.jsonl 2>/dev/null || true
+          echo "📊 Merged: $(wc -l < ingredients_enriched_v3.jsonl) ingredients"
+
+      - name: Load to Supabase
+        working-directory: repo
+        run: |
+          INPUT_FILE=$GITHUB_WORKSPACE/ingredients_enriched_v3.jsonl python scripts/load_supabase_v3.py
+          echo "✅ Supabase updated"
+
+      - name: Upload final artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: enrichment-results
+          path: |
+            ingredients_enriched_v3.jsonl
+            overrides_log.jsonl
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          COUNT=$(wc -l < ingredients_enriched_v3.jsonl 2>/dev/null || echo 0)
+          echo "## Ingredient Enrichment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ingredients processed**: $COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider**: ${{ github.event.inputs.api_provider || 'openrouter (scheduled)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Shards**: 10 parallel jobs" >> $GITHUB_STEP_SUMMARY
