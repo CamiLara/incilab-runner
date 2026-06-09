@@ -1,0 +1,31 @@
+name: Rescore Products
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rescore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Rescore v2
+        working-directory: repo
+        run: python3 rescore.py --workers 6
