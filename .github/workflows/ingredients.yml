@@ -29,6 +29,12 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
       - name: Seed ingredients nuevos
         working-directory: repo
         run: python3 incilab_seed.py --task ingredients

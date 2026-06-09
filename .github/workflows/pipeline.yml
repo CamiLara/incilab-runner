@@ -48,6 +48,12 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
       - name: discover_new (INCIDecoder)
         if: ${{ !inputs.skip_discover }}
         working-directory: repo
@@ -91,6 +97,12 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
       - name: ingredients
         working-directory: repo
         run: python3 incilab_seed.py --task ingredients --workers 6
@@ -123,6 +135,12 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
       - name: categories
         working-directory: repo
         run: python3 incilab_seed.py --task categories --workers 6
@@ -143,6 +161,12 @@ jobs:
       - name: Instalar dependencias
         working-directory: repo
         run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
       - name: reviews
         working-directory: repo
@@ -175,6 +199,12 @@ jobs:
       - name: Instalar dependencias
         working-directory: repo
         run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
       - name: rescore v2
         working-directory: repo
