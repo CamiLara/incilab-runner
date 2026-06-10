@@ -1,0 +1,46 @@
+name: Reclassify Categories
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Reclasificar productos que ya tienen categoría'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  categories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: Reclassify categories
+        working-directory: repo
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ inputs.force }}" = "true" ]; then FORCE_FLAG="--force"; fi
+          python3 incilab_seed.py --task categories --workers 6 $FORCE_FLAG
