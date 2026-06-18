@@ -1,24 +1,30 @@
-name: InciLab Data Pipeline
+name: InciLab Retry Pipeline
 
 on:
-  schedule:
-    - cron: '0 4 */3 * *'   # cada 3 días a las 4am UTC
   workflow_dispatch:
     inputs:
-      skip_discover:
-        description: 'Omitir discover_new (INCIDecoder)'
+      skip_ingredients:
+        description: 'Omitir retry de ingredientes (incilab_failed.json)'
         type: boolean
         default: false
-      skip_jolse:
-        description: 'Omitir discover_jolse'
+      skip_fill_empty:
+        description: 'Omitir fill_empty (ingredientes con description vacía en DB)'
         type: boolean
         default: false
-      skip_images:
-        description: 'Omitir scrape_images'
+      skip_reviews:
+        description: 'Omitir retry de reviews'
         type: boolean
         default: false
-      skip_enrich:
-        description: 'Omitir enriquecimiento (ingredients, reviews, categories)'
+      skip_categories:
+        description: 'Omitir retry de categories'
+        type: boolean
+        default: false
+      skip_htu:
+        description: 'Omitir generate_htu (how_to_use faltantes)'
+        type: boolean
+        default: false
+      skip_rescore:
+        description: 'Omitir rescore final'
         type: boolean
         default: false
 
@@ -33,123 +39,11 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  seed:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Clone private repo
-        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Instalar dependencias
-        working-directory: repo
-        run: pip install -r requirements.txt
-
-      - name: Strip newlines from secrets
-        run: |
-          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-
-      - name: discover_new (INCIDecoder)
-        if: ${{ !inputs.skip_discover }}
-        working-directory: repo
-        run: python3 incilab_seed.py --task discover_new --pages 5 --delay 2
-
-      - name: discover_jolse
-        if: ${{ !inputs.skip_jolse }}
-        working-directory: repo
-        run: python3 incilab_seed.py --task discover_jolse --delay 1.5
-
-      - name: scrape_images
-        if: ${{ !inputs.skip_images }}
-        working-directory: repo
-        run: python3 scrape_images.py --delay 1 --workers 2
-
-      - name: Guardar estado en repo privado
-        if: always()
-        working-directory: repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/incidecoder_new_seen.json data/jolse_seen.json data/scrape_skip.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "chore: update seed state [skip ci]"
-          git pull --rebase --autostash origin main
-          git push
-
-  enrich_ingredients:
-    needs: seed
-    if: ${{ !inputs.skip_enrich }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - name: Clone private repo
-        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Instalar dependencias
-        working-directory: repo
-        run: pip install -r requirements.txt
-
-      - name: Strip newlines from secrets
-        run: |
-          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-
-      - name: ingredients
-        working-directory: repo
-        run: python3 incilab_seed.py --task ingredients --workers 6
-
-      - name: Guardar estado en repo privado
-        if: always()
-        working-directory: repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/incilab_failed.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "chore: update ingredients state [skip ci]"
-          git pull --rebase --autostash origin main
-          git push
-
-  enrich_categories:
-    needs: seed
-    if: ${{ !inputs.skip_enrich }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - name: Clone private repo
-        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Instalar dependencias
-        working-directory: repo
-        run: pip install -r requirements.txt
-
-      - name: Strip newlines from secrets
-        run: |
-          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
-
-      - name: categories
-        working-directory: repo
-        run: python3 incilab_seed.py --task categories --workers 6
-
+  # ── 1. Retry ingredientes fallidos (incilab_failed.json) ─────────────────────
   retry_ingredients:
-    needs: enrich_ingredients
-    if: ${{ !inputs.skip_enrich }}
+    if: ${{ !inputs.skip_ingredients }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
@@ -183,11 +77,51 @@ jobs:
           git pull --rebase --autostash origin main
           git push
 
-  enrich_reviews:
+  # ── 2. Fill empty (ingredientes con description_es vacía en DB, sin log) ──────
+  fill_empty:
     needs: retry_ingredients
-    if: ${{ !inputs.skip_enrich }}
+    if: ${{ always() && !inputs.skip_fill_empty }}
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 240
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: fill_empty
+        working-directory: repo
+        run: python3 incilab_seed.py --task fill_empty --workers 6 --limit 2000
+
+      - name: Guardar estado en repo privado
+        if: always()
+        working-directory: repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/incilab_failed.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: fill_empty state [skip ci]"
+          git pull --rebase --autostash origin main
+          git push
+
+  # ── 3a. Reviews (idempotente — re-procesa solo los que faltan en DB) ──────────
+  retry_reviews:
+    needs: fill_empty
+    if: ${{ always() && !inputs.skip_reviews }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
@@ -210,20 +144,10 @@ jobs:
         working-directory: repo
         run: python3 incilab_seed.py --task reviews --workers 6
 
-      - name: Guardar estado en repo privado
-        if: always()
-        working-directory: repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/incilab_failed.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "chore: update enrich state [skip ci]"
-          git pull --rebase --autostash origin main
-          git push
-
-  rescore:
-    needs: [enrich_reviews, enrich_categories]
-    if: ${{ !inputs.skip_enrich }}
+  # ── 3b. Categories (idempotente — rellena solo los NULL en DB) ───────────────
+  retry_categories:
+    needs: fill_empty
+    if: ${{ always() && !inputs.skip_categories }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -244,6 +168,62 @@ jobs:
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
           echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
-      - name: rescore v2
+      - name: categories
+        working-directory: repo
+        run: python3 incilab_seed.py --task categories --workers 6
+
+  # ── 4. Generate HTU (how_to_use IS NULL AND category IS NOT NULL) ─────────────
+  retry_htu:
+    needs: [retry_reviews, retry_categories]
+    if: ${{ always() && !inputs.skip_htu }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: generate_htu
+        working-directory: repo
+        run: python3 incilab_seed.py --task generate_htu --workers 6 --limit 2000
+
+  # ── 5. Rescore final ──────────────────────────────────────────────────────────
+  rescore:
+    needs: [retry_reviews, retry_categories, retry_htu]
+    if: ${{ always() && !inputs.skip_rescore }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: rescore_v2
         working-directory: repo
         run: python3 rescore.py --workers 6
