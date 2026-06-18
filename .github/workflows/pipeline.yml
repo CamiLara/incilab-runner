@@ -221,8 +221,35 @@ jobs:
           git pull --rebase --autostash origin main
           git push
 
+  generate_htu:
+    needs: [retry_ingredients, enrich_categories]
+    if: ${{ !inputs.skip_enrich }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: generate_htu
+        working-directory: repo
+        run: python3 incilab_seed.py --task generate_htu --workers 6 --limit 2000
+
   rescore:
-    needs: [enrich_reviews, enrich_categories]
+    needs: [enrich_reviews, generate_htu]
     if: ${{ !inputs.skip_enrich }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
