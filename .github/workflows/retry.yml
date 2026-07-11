@@ -28,6 +28,13 @@ on:
         type: boolean
         default: false
 
+# Serializa con ingredients.yml y pipeline.yml: solo un workflow escribe
+# en incilab-enrich (data/incilab_failed.json) a la vez, evitando
+# conflictos de merge en el push de estado.
+concurrency:
+  group: incilab-enrich-writes
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -48,7 +55,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -87,7 +94,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -126,7 +133,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -154,7 +161,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -182,7 +189,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -210,7 +217,7 @@ jobs:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
