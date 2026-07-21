@@ -6,7 +6,7 @@ GitHub Actions runner for the InciLab data pipeline.
 
 | Workflow | Schedule | Trigger | Description |
 |----------|----------|---------|-------------|
-| `pipeline.yml` | Every 3 days | Automatic + manual | Discover products → scrape images → ingredients → categories → reviews → rescore |
+| `pipeline.yml` | Every 3 days | Automatic + manual | Discover products → scrape images → ingredients → categories → reviews → rescore → moderate_content (independent job — content moderation safety-net sweep, see below) |
 | `ingredients.yml` | Daily | Automatic + manual | Fill new ingredients from user searches |
 | `categories.yml` | On demand | Manual only | Reclassify `product_category` in `products_cache` using LLM. Input: `force` (bool) — if true, reclassifies all products including those already categorized |
 | `rescore.yml` | On demand | Manual only | Recalculate dermico/eco/eficacia scores with algorithm v2 |
@@ -15,6 +15,15 @@ GitHub Actions runner for the InciLab data pipeline.
 ## How it works
 
 Each workflow clones the private `incilab-enrich` repo at runtime and runs scripts from it. **To update pipeline logic, push to `incilab-enrich` — no changes needed here.**
+
+## Content moderation sweep (`moderate_content` job in `pipeline.yml`)
+
+Backup layer for the real-time moderation in `incilab-web-api` (word filter + async LLM check on every verdict/comment/review). This job re-scans, with an LLM, whatever was published in the last 3 days across `verdicts`, `verdict_comments` and `reviews` — catches anything that slipped through if the web's real-time check failed (e.g. `OPENROUTER_API_KEY` down on Vercel). Flagged content is hidden (`activo=false`) and founders get a notification; it never auto-suspends users (single automated signal, not corroborated by multiple reports). Independent job, no `needs:` — doesn't touch `products_cache`/`ingredients` or local state files, only Supabase community tables.
+
+```bash
+python3 incilab_seed.py --task moderate_content                              # last 3 days
+python3 incilab_seed.py --task moderate_content --since-days 7 --dry-run     # wider window, no writes
+```
 
 ## Reclassify categories after schema changes
 
