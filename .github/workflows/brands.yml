@@ -1,0 +1,86 @@
+name: Seed Brands
+
+on:
+  schedule:
+    - cron: '0 5 * * 0'   # semanal, domingos 5am UTC — el catalogo de marcas cambia poco
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no escribe en Supabase)'
+        type: boolean
+        default: false
+      source:
+        description: 'Fuente a scrapear (all=jolse+stylevana; all-stores/oliveyoung/yesstyle usan Playwright)'
+        type: choice
+        options:
+          - all
+          - all-stores
+          - jolse
+          - stylevana
+          - oliveyoung
+          - yesstyle
+        default: all
+      debug_dump:
+        description: 'Guardar HTML renderizado de OY/YesStyle como artifact (afinar selectores)'
+        type: boolean
+        default: false
+
+# Independiente del resto del pipeline: no toca products_cache/ingredients
+# ni archivos de estado en data/ salvo brand_origin_overrides.json (solo lectura).
+permissions:
+  contents: read
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  brands:
+    runs-on: ubuntu-latest
+    # Headless (all-stores/oliveyoung/yesstyle) tarda más: espera del challenge de
+    # Cloudflare + scroll de directorios A-Z. El cron 'all' (requests) es rápido.
+    timeout-minutes: 25
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      # Playwright NO está en requirements.txt (dep pesada). Se instala SOLO cuando la
+      # fuente lo necesita — el cron programado ('all') salta este paso.
+      - name: Instalar Playwright (solo fuentes headless)
+        if: contains(fromJSON('["all-stores","oliveyoung","yesstyle"]'), inputs.source)
+        working-directory: repo
+        run: |
+          pip install playwright
+          python3 -m playwright install --with-deps chromium
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: seed_brands
+        working-directory: repo
+        run: |
+          python3 seed_brands.py \
+            --source "${{ inputs.source || 'all' }}" \
+            ${{ (inputs.dry_run && '--dry-run') || '' }} \
+            ${{ (inputs.debug_dump && '--debug-dump') || '' }}
+
+      # Subir el HTML renderizado para inspeccionar el DOM real y afinar los selectores
+      # de marca (heurísticos hasta la primera corrida verificada).
+      - name: Subir dumps de HTML
+        if: ${{ inputs.debug_dump }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: brands-html-dumps
+          path: repo/data/brands_dump_*.html
+          if-no-files-found: ignore
