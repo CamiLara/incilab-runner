@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       source:
-        description: 'Fuente a scrapear (all=jolse+stylevana; all-stores/oliveyoung/yesstyle usan Playwright)'
+        description: 'Fuente a scrapear (all-stores=las 4; all=solo jolse+stylevana; oliveyoung usa Playwright)'
         type: choice
         options:
           - all
@@ -19,7 +19,7 @@ on:
           - stylevana
           - oliveyoung
           - yesstyle
-        default: all
+        default: all-stores
       debug_dump:
         description: 'Guardar HTML renderizado de OY/YesStyle como artifact (afinar selectores)'
         type: boolean
@@ -38,8 +38,8 @@ env:
 jobs:
   brands:
     runs-on: ubuntu-latest
-    # Headless (all-stores/oliveyoung/yesstyle) tarda más: espera del challenge de
-    # Cloudflare + scroll de directorios A-Z. El cron 'all' (requests) es rápido.
+    # 'all-stores' suma el install de Chromium + el render del directorio A-Z de
+    # OliveYoung (~10 min en total). Jolse/Stylevana/YesStyle van por requests.
     timeout-minutes: 25
     steps:
       - name: Clone private repo
@@ -53,10 +53,13 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
-      # Playwright NO está en requirements.txt (dep pesada). Se instala SOLO cuando la
-      # fuente lo necesita — el cron programado ('all') salta este paso.
+      # Playwright NO está en requirements.txt (dep pesada). Se instala solo cuando la
+      # fuente lo necesita. En runs programados `inputs.source` viene vacío, así que
+      # hay que evaluar el MISMO default que usa el step de seed ('all-stores') — con
+      # `inputs.source` a secas el cron no instalaba Chromium y OliveYoung explotaba
+      # al importar playwright.
       - name: Instalar Playwright (solo fuentes headless)
-        if: contains(fromJSON('["all-stores","oliveyoung","yesstyle"]'), inputs.source)
+        if: contains(fromJSON('["all-stores","oliveyoung"]'), inputs.source || 'all-stores')
         working-directory: repo
         run: |
           pip install playwright
@@ -71,7 +74,7 @@ jobs:
         working-directory: repo
         run: |
           python3 seed_brands.py \
-            --source "${{ inputs.source || 'all' }}" \
+            --source "${{ inputs.source || 'all-stores' }}" \
             ${{ (inputs.dry_run && '--dry-run') || '' }} \
             ${{ (inputs.debug_dump && '--debug-dump') || '' }}
 
