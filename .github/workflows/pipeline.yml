@@ -213,9 +213,26 @@ jobs:
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
           echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
-      - name: reviews
+      # reviews no batchea (1 producto = 1 request LLM, a diferencia de ingredients/
+      # routine_tips que agrupan 10-20 por llamada) — con --limit 150 x 4 locales son
+      # 600 requests como mucho acá, dejando margen dentro de la cuota diaria de
+      # OpenRouter para el resto de los jobs de este mismo pipeline (ingredients,
+      # categories, retry, generate_htu, moderate_content).
+      - name: reviews_es
         working-directory: repo
-        run: python3 incilab_seed.py --task reviews --workers 6
+        run: python3 incilab_seed.py --task reviews --locale es --workers 6 --limit 150
+
+      - name: reviews_en
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale en --workers 6 --limit 150
+
+      - name: reviews_pt
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale pt_br --workers 6 --limit 150
+
+      - name: reviews_fr
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale fr --workers 6 --limit 150
 
       - name: Guardar estado en repo privado
         if: always()
