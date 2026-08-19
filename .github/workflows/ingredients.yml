@@ -50,35 +50,11 @@ jobs:
         working-directory: repo
         run: python3 incilab_seed.py --task fill_empty --limit 400
 
-      - name: Rellenar ingredientes sin description_fr (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task ingredient_descriptions --locale fr --workers 6 --limit 400
-
-      - name: Rellenar ingredientes sin description_pt_br (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task ingredient_descriptions --locale pt_br --workers 6 --limit 400
-
-      - name: Rellenar ingredientes sin description_en (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task ingredient_descriptions --locale en --workers 6 --limit 400
-
       # routine_tips no tenía ningún paso automático (ni para es) — quedaba manual.
       # Mismo presupuesto que description_* de arriba: 400 ingredientes por idioma por día.
       - name: Rellenar tip_rutina_es (400 por run)
         working-directory: repo
         run: python3 incilab_seed.py --task routine_tips --locale es --workers 6 --limit 400
-
-      - name: Rellenar tip_rutina_fr (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task routine_tips --locale fr --workers 6 --limit 400
-
-      - name: Rellenar tip_rutina_pt_br (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task routine_tips --locale pt_br --workers 6 --limit 400
-
-      - name: Rellenar tip_rutina_en (400 por run)
-        working-directory: repo
-        run: python3 incilab_seed.py --task routine_tips --locale en --workers 6 --limit 400
 
       - name: Guardar estado en repo privado
         if: always()
