@@ -1,0 +1,56 @@
+name: Image Audit
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # diario a las 5am UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no marca ni oculta nada, solo reporta)'
+        type: boolean
+        default: false
+
+# Independiente de pipeline.yml/ingredients.yml/retry.yml: no toca data/ (la
+# resumibilidad vive en products_cache.image_audit_checked_at, no en un archivo
+# de estado local), así que no necesita el grupo de concurrencia de esos otros
+# workflows ni un paso de "guardar estado en el repo".
+permissions:
+  contents: read
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  image_audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      # 200-300 productos por corrida a propósito: cada llamada de visión tiene costo
+      # real (google/gemini-2.5-flash vía OpenRouter, no un modelo gratis), a diferencia
+      # del resto de las tareas de este runner. La resumibilidad la da
+      # products_cache.image_audit_checked_at (ver incilab-db/migrations/
+      # image_audit_migration.sql) — cada corrida avanza sobre lo no auditado todavía,
+      # sin reprocesar nada.
+      - name: image_audit
+        working-directory: repo
+        run: python3 incilab_seed.py --task image_audit --limit 250 --workers 4 ${{ inputs.dry_run && '--dry-run' || '' }}
