@@ -39,18 +39,26 @@ jobs:
         working-directory: repo
         run: pip install -r requirements.txt
 
+      # OCR de la capa 1 — no está en requirements.txt porque pesa ~300MB (onnxruntime,
+      # opencv, scipy) y ninguna otra tarea lo usa, mismo criterio que playwright.
+      # Sin esto la tarea igual corre, pero todo escala a visión y come cuota al pedo.
+      - name: Instalar OCR (capa 1)
+        working-directory: repo
+        run: pip install rapidocr-onnxruntime
+
       - name: Strip newlines from secrets
         run: |
           echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
           echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
-      # 200-300 productos por corrida a propósito: cada llamada de visión tiene costo
-      # real (google/gemini-2.5-flash vía OpenRouter, no un modelo gratis), a diferencia
-      # del resto de las tareas de este runner. La resumibilidad la da
-      # products_cache.image_audit_checked_at (ver incilab-db/migrations/
-      # image_audit_migration.sql) — cada corrida avanza sobre lo no auditado todavía,
-      # sin reprocesar nada.
+      # 250 por corrida: medido a ~3.8s por imagen (descarga + OCR local), o sea unos
+      # 16 min, cómodo dentro del timeout. Solo ~12% llega a la capa de visión (~30
+      # llamadas), volumen que los modelos gratis sí absorben — mandarles las 250
+      # devolvía 429 "rate-limited upstream".
+      # La resumibilidad la da products_cache.image_audit_checked_at (ver
+      # incilab-db/migrations/image_audit_migration.sql): cada corrida avanza sobre lo
+      # no auditado todavía, sin reprocesar nada.
       - name: image_audit
         working-directory: repo
         run: python3 incilab_seed.py --task image_audit --limit 250 --workers 4 ${{ inputs.dry_run && '--dry-run' || '' }}
