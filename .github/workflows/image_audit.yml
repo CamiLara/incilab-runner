@@ -21,6 +21,11 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  # Opcional: habilita la capa de imagen de referencia (busca en Google cómo se ve el
+  # producto y compara por perceptual hash). Si el secret no existe, esa capa se saltea
+  # sola y el resto funciona igual. OJO: es la misma clave que usa incilab-web-api para
+  # buscar INCI (2.500/mes en el plan gratis), por eso --max-serper la topea.
+  SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
   PYTHONUNBUFFERED: "1"
 
 jobs:
@@ -51,14 +56,18 @@ jobs:
           echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
           echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SERPER_API_KEY=$(printenv SERPER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
-      # 250 por corrida: medido a ~3.8s por imagen (descarga + OCR local), o sea unos
-      # 16 min, cómodo dentro del timeout. Solo ~12% llega a la capa de visión (~30
-      # llamadas), volumen que los modelos gratis sí absorben — mandarles las 250
-      # devolvía 429 "rate-limited upstream".
-      # La resumibilidad la da products_cache.image_audit_checked_at (ver
-      # incilab-db/migrations/image_audit_migration.sql): cada corrida avanza sobre lo
-      # no auditado todavía, sin reprocesar nada.
+      # 250 por corrida, con los dos topes explícitos aunque coincidan con los defaults
+      # (que se lean acá, sin tener que abrir el script):
+      #   --max-serper 25  cuota COMPARTIDA con el buscador de INCI de incilab-web-api
+      #                    (2.500/mes en el plan gratis) → ~750/mes, 30%, deja margen.
+      #   --max-vision 60  los modelos gratis de visión aguantan decenas de llamadas por
+      #                    corrida, no cientos: sin tope, una corrida con 591 pendientes
+      #                    las intentaba todas y no resolvía ninguna.
+      # Lo que excede los topes queda SIN MARCAR y lo toma la corrida del día siguiente
+      # — la resumibilidad la da products_cache.image_audit_checked_at (ver
+      # incilab-db/migrations/image_audit_migration.sql), así que nada se reprocesa.
       - name: image_audit
         working-directory: repo
-        run: python3 incilab_seed.py --task image_audit --limit 250 --workers 4 ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: python3 incilab_seed.py --task image_audit --limit 250 --workers 4 --max-serper 25 --max-vision 60 ${{ inputs.dry_run && '--dry-run' || '' }}
