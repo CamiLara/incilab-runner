@@ -114,6 +114,13 @@ jobs:
         working-directory: repo
         run: python3 incilab_seed.py --task ingredients --workers 6
 
+      # Único paso que retry.yml tenía y este pipeline no; era la razón por la que
+      # ese workflow seguía existiendo. Límite más alto que el de ingredients.yml
+      # (400/día) porque acá corre cada 3 días y sirve de puesta al día.
+      - name: fill_empty
+        working-directory: repo
+        run: python3 incilab_seed.py --task fill_empty --workers 6 --limit 2000
+
       - name: Guardar estado en repo privado
         if: always()
         working-directory: repo
