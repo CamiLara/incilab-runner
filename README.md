@@ -13,7 +13,6 @@ GitHub Actions runner for the InciLab data pipeline.
 | `enrich-full.yml` | 1st Sunday/month | Automatic + manual | Full ingredient regeneration from CosIng via LLM |
 | `brands.yml` | Weekly (Sun 5am) | Automatic + manual | Scrape Jolse + Stylevana brand directories, upsert into `brands` table |
 | `image_audit.yml` | Daily (5am) | Automatic + manual | OCR + vision check that each product image matches its label; empties confirmed mismatches |
-| `retry.yml` | On demand | Manual only | Re-runs the enrichment steps of `pipeline.yml` against whatever failed (`data/incilab_failed.json` + empty columns in DB), skipping discovery and image scraping |
 
 ## How it works
 
@@ -27,12 +26,26 @@ is invisible from the repo, so anyone reading that directory reasonably assumed 
 If you ever need a workflow there again, remember that **concurrency groups do not span
 repositories** — a copy in `incilab-enrich` can never serialize against these.
 
+## Catching up after failures
+
+There is no separate "retry" workflow. `pipeline.yml` already runs every enrichment step
+(`retry`, `fill_empty`, `categories`, `reviews`, `generate_htu`, `rescore`), so to catch up on a
+backlog you run it manually with `skip_discover`, `skip_jolse` and `skip_images` checked — the
+inputs exist for exactly this. `retry.yml` used to be a 236-line copy of those same jobs and was
+removed in Aug 2026; it had drifted (its `reviews` step still ran the pre-i18n command and
+retried Spanish only).
+
+The one thing it had that `pipeline.yml` lacked, `fill_empty`, is now a step in the
+`enrich_ingredients` job. Note that `pipeline.yml` caps reviews at `--limit 150` per locale
+while `retry.yml` was uncapped: catching up a large review backlog now takes a few runs, which
+is deliberate — the OpenRouter free-tier quota is shared across every workflow.
+
 ## Concurrency
 
-`pipeline.yml`, `ingredients.yml`, `retry.yml` and `enrich-full.yml` share the
-`incilab-enrich-writes` group, for two different reasons:
+`pipeline.yml`, `ingredients.yml` and `enrich-full.yml` share the `incilab-enrich-writes`
+group, for two different reasons:
 
-- The first three push state (`data/incilab_failed.json`) back to `incilab-enrich`; running
+- The first two push state (`data/incilab_failed.json`) back to `incilab-enrich`; running
   two at once produces merge conflicts on that push.
 - `enrich-full.yml` writes no state, but `load_supabase_v3.py` upserts all ~26,885 rows of the
   `ingredients` table, which is the same table `ingredients.yml` enriches daily. Before Aug 2026
@@ -53,13 +66,14 @@ Sunday and a `guard` job exits early on days 8-31. The guard is a job, not a ste
 `merge-and-load` skips too — otherwise the shards would produce nothing and the merge would fail
 every week. Manual `workflow_dispatch` runs ignore the guard.
 
-**It overwrites `description_es` and `tip_rutina_es`, and that desyncs the translations.**
-`load_supabase_v3.py` upserts all 16 columns unconditionally, and those two are the source
-`translate_backfill_googletrans.py` translates from. The backfill only fills rows where the target
-locale `is.null`, so once `description_en` exists it is never refreshed — after a regeneration the
-Spanish text and its en/pt_br/fr translations describe the same ingredient differently, and stay
-that way. **This is a known open issue, not a solved one.** Until it is fixed, either avoid the
-full regeneration or null out the other locales afterwards so the backfill regenerates them.
+**It no longer writes `description_es` / `tip_rutina_es`** (fixed Aug 2026). Those columns belong
+to `incilab_seed.py` (`--task fill_empty` / `routine_tips`), which generates them with a far more
+calibrated prompt — and they are the source `translate_backfill_googletrans.py` translates from.
+Since that backfill only fills rows where the target locale `is.null`, overwriting the Spanish
+used to leave en/pt_br/fr permanently describing the ingredient differently. `load_supabase_v3.py`
+now omits both columns from the upsert payload, so Postgres leaves existing values untouched and
+new rows arrive `NULL` for `fill_empty` to pick up. Clean split: **this workflow owns the 15
+classification and CosIng-metadata columns, the seed owns the content columns.**
 
 **Models**: rotates over OpenRouter's `:free` pool via `utils/openrouter_free.py` in
 `incilab-enrich` — never a hardcoded paid slug. The `model` input pins one model for debugging
