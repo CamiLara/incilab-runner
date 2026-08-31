@@ -11,22 +11,53 @@ on:
         options:
           - openrouter
           - anthropic
-      model_quality:
-        description: 'Model (OpenRouter only)'
+      model:
+        description: 'Fijar un modelo (debug). Vacío = rotación sobre el pool :free'
         required: false
-        default: 'haiku'
-        type: choice
-        options:
-          - haiku
-          - sonnet
+        default: ''
+        type: string
   schedule:
-    - cron: '0 2 * * 0'   # primer domingo de cada mes, 2am UTC
+    # Cron no expresa "primer domingo": si se restringen día-del-mes Y día-de-semana
+    # se combinan con OR, no con AND. Así que dispara todos los domingos y el guard
+    # del primer paso corta los que no caen en los primeros 7 días del mes.
+    - cron: '0 2 * * 0'
+
+# Comparte grupo con ingredients.yml/pipeline.yml/retry.yml. No es por el push de
+# estado (este workflow no escribe en el repo) sino por la tabla `ingredients`:
+# load_supabase_v3.py hace un upsert masivo de los 26.885 ingredientes y el job
+# diario enriquece esa misma tabla. Los domingos se solapaban.
+concurrency:
+  group: incilab-enrich-writes
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  # La regeneración completa es mensual, pero cron no sabe decir "primer domingo",
+  # así que dispara todos los domingos y esto corta los que no corresponden. Va como
+  # job y no como paso para que merge-and-load también se saltee: si no, los shards
+  # quedarían vacíos y el merge fallaría por "ningún shard produjo datos".
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        run: |
+          DAY=$(date -u +%d)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$DAY" -gt 7 ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⏭  Día $DAY — no es el primer domingo del mes, se saltea."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "▶️  Corriendo (evento: ${{ github.event_name }}, día $DAY)."
+          fi
+
   enrich:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -41,24 +72,39 @@ jobs:
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SHARD_INDEX: ${{ matrix.shard }}
       SHARD_TOTAL: 10
+      # El script elegía proveedor por qué secret estaba cargada, así que los
+      # inputs no hacían nada. Ahora se los pasamos explícitamente.
+      API_PROVIDER: ${{ inputs.api_provider || 'openrouter' }}
+      ENRICH_MODEL: ${{ inputs.model }}
     steps:
       - name: Clone private repo
         run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Instalar dependencias
         working-directory: repo
-        run: pip install requests supabase
+        run: pip install -r requirements.txt
+
+      # Igual que el resto de los workflows: un \n al final de un secret rompe
+      # el header Authorization con InvalidHeader en cada request.
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_PROJECT_ID=$(printenv SUPABASE_PROJECT_ID | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SECRET_KEY=$(printenv SUPABASE_SECRET_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "ANTHROPIC_API_KEY=$(printenv ANTHROPIC_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
       - name: Check secrets
         run: |
           if [ -z "$SUPABASE_PROJECT_ID" ]; then echo "❌ Missing SUPABASE_PROJECT_ID"; exit 1; fi
           if [ -z "$SUPABASE_SECRET_KEY" ]; then echo "❌ Missing SUPABASE_SECRET_KEY"; exit 1; fi
-          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then echo "❌ Missing API key"; exit 1; fi
-          echo "✅ Secrets OK — shard ${{ matrix.shard }}/10"
+          if [ "$API_PROVIDER" = "anthropic" ] && [ -z "$ANTHROPIC_API_KEY" ]; then echo "❌ Missing ANTHROPIC_API_KEY"; exit 1; fi
+          if [ "$API_PROVIDER" = "openrouter" ] && [ -z "$OPENROUTER_API_KEY" ]; then echo "❌ Missing OPENROUTER_API_KEY"; exit 1; fi
+          echo "✅ Secrets OK — shard ${{ matrix.shard }}/10 — provider $API_PROVIDER"
 
       - name: Run enrichment (shard ${{ matrix.shard }})
         working-directory: repo
@@ -81,8 +127,10 @@ jobs:
   merge-and-load:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: enrich
-    if: always()
+    needs: [guard, enrich]
+    # always() para cargar igual lo que sí produjeron los shards que no fallaron,
+    # pero sin correr en los domingos que el guard salteó.
+    if: always() && needs.guard.outputs.skip != 'true'
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
@@ -94,7 +142,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Instalar dependencias
         run: pip install supabase
@@ -109,7 +157,10 @@ jobs:
         run: |
           cat shards/shard-*/ingredients_enriched_v3_shard_*.jsonl > ingredients_enriched_v3.jsonl 2>/dev/null || true
           cat shards/shard-*/overrides_log_shard_*.jsonl > overrides_log.jsonl 2>/dev/null || true
-          echo "📊 Merged: $(wc -l < ingredients_enriched_v3.jsonl) ingredients"
+          COUNT=$(wc -l < ingredients_enriched_v3.jsonl)
+          echo "📊 Merged: $COUNT ingredients"
+          # Sin esto, con todos los shards caídos igual se corría el load contra Supabase.
+          if [ "$COUNT" -eq 0 ]; then echo "❌ Ningún shard produjo datos — no se carga nada"; exit 1; fi
 
       - name: Load to Supabase
         working-directory: repo
@@ -132,5 +183,6 @@ jobs:
           COUNT=$(wc -l < ingredients_enriched_v3.jsonl 2>/dev/null || echo 0)
           echo "## Ingredient Enrichment Complete" >> $GITHUB_STEP_SUMMARY
           echo "- **Ingredients processed**: $COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "- **Provider**: ${{ github.event.inputs.api_provider || 'openrouter (scheduled)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider**: ${{ inputs.api_provider || 'openrouter (scheduled)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Model**: ${{ inputs.model || 'pool :free (rotación)' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Shards**: 10 parallel jobs" >> $GITHUB_STEP_SUMMARY

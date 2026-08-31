@@ -147,9 +147,24 @@ jobs:
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
           echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
-      - name: reviews
+      # Sin --locale el default es "es" (incilab_seed.py, argparse), así que este paso
+      # venía reintentando solo español desde antes de que reviews fuera multi-locale:
+      # los fallos de en/pt_br/fr no los reintentaba nadie. Mismo set que pipeline.yml.
+      - name: reviews_es
         working-directory: repo
-        run: python3 incilab_seed.py --task reviews --workers 6
+        run: python3 incilab_seed.py --task reviews --locale es --workers 6
+
+      - name: reviews_en
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale en --workers 6
+
+      - name: reviews_pt
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale pt_br --workers 6
+
+      - name: reviews_fr
+        working-directory: repo
+        run: python3 incilab_seed.py --task reviews --locale fr --workers 6
 
   # ── 3b. Categories (idempotente — rellena solo los NULL en DB) ───────────────
   retry_categories:
