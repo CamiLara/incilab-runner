@@ -13,6 +13,7 @@ GitHub Actions runner for the InciLab data pipeline.
 | `enrich-full.yml` | 1st Sunday/month | Automatic + manual | Full ingredient regeneration from CosIng via LLM |
 | `brands.yml` | Weekly (Sun 5am) | Automatic + manual | Scrape Jolse + Stylevana brand directories, upsert into `brands` table |
 | `image_audit.yml` | Daily (5am) | Automatic + manual | OCR + vision check that each product image matches its label; empties confirmed mismatches |
+| `ground-truth-backfill.yml` | On demand | Manual only | Applies `data/ground_truth.json` to rows already in `ingredients`, then chains `--task scores`. Input: `dry_run` (default true) |
 
 ## How it works
 
@@ -40,10 +41,32 @@ The one thing it had that `pipeline.yml` lacked, `fill_empty`, is now a step in 
 while `retry.yml` was uncapped: catching up a large review backlog now takes a few runs, which
 is deliberate — the OpenRouter free-tier quota is shared across every workflow.
 
+## `ground-truth-backfill.yml` — correcting rows already in the table
+
+`sanitize_ing()` in `incilab_seed.py` applies the regulatory ground truth to everything
+enriched from now on. This workflow is for the rows that were already there — enriched
+when the curated lists were smaller, or with `endocrine_disruptor` decided by the LLM
+rather than by a regulator. **No LLM involved**: it is a pure transformation against
+`data/ground_truth.json`, so it costs nothing and does not touch the OpenRouter quota.
+
+Manual only, and `dry_run` defaults to **true** — it corrects thousands of production
+rows at once, so the first run should always be a report you read before applying.
+
+**`--task scores` is chained in the same job, not split into another.** `calcScoreDermico()`
+penalises confirmed endocrine disruptors heavily, so moving that column without recomputing
+leaves the app showing scores that no longer match their ingredients. That dependency has
+been documented in `incilab-db/fixes/fix_disruptors_false_positives.sql` since July 2026.
+It is skipped on a dry run, where nothing changed.
+
+The report is gitignored in `incilab-enrich` (196 KB regenerated every run), so the job
+uploads it as an artifact — that is the only record of what changed and from which value.
+
+First run, Aug 2026: 1,453 rows corrected, 14,393 scores recomputed.
+
 ## Concurrency
 
-`pipeline.yml`, `ingredients.yml` and `enrich-full.yml` share the `incilab-enrich-writes`
-group, for two different reasons:
+`pipeline.yml`, `ingredients.yml`, `enrich-full.yml` and `ground-truth-backfill.yml` share
+the `incilab-enrich-writes` group, for two different reasons:
 
 - The first two push state (`data/incilab_failed.json`) back to `incilab-enrich`; running
   two at once produces merge conflicts on that push.
