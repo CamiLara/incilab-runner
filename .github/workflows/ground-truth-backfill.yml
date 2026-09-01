@@ -1,0 +1,113 @@
+name: Ground Truth Backfill
+
+# Manual a propósito, sin cron: corrige de una vez miles de filas de `ingredients`
+# contra data/ground_truth.json. No es mantenimiento periódico — se corre cuando
+# cambió la ground truth (se agregaron citas, se importaron fixes curados) y hay que
+# propagarlo a lo que ya estaba en la tabla.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — solo reporta, no escribe (dejalo marcado la primera vez)'
+        type: boolean
+        default: true
+
+# Escribe la tabla `ingredients`, la misma que enriquecen ingredients.yml y
+# pipeline.yml. Sin el grupo, un backfill podría pisar filas que otro workflow está
+# escribiendo en ese momento.
+concurrency:
+  group: incilab-enrich-writes
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # El backfill son minutos, pero --task scores recorre 14K productos: ~35 min.
+    timeout-minutes: 180
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      - name: Backfill ground truth
+        working-directory: repo
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python3 incilab_seed.py --task backfill_ground_truth --dry-run
+          else
+            python3 incilab_seed.py --task backfill_ground_truth
+          fi
+
+      # Encadenado a propósito, no en un job aparte: calcScoreDermico() penaliza fuerte
+      # los disruptores confirmados, así que dejar los scores sin recalcular después de
+      # mover ese campo deja la app mostrando puntajes que ya no corresponden a sus
+      # ingredientes. La dependencia la documenta incilab-db/fixes/
+      # fix_disruptors_false_positives.sql desde julio 2026.
+      - name: Recalcular scores
+        if: ${{ inputs.dry_run != true }}
+        working-directory: repo
+        run: python3 incilab_seed.py --task scores
+
+      # El reporte está gitignoreado en incilab-enrich (196 KB que se regeneran en cada
+      # corrida). Como artifact queda el detalle fila por fila de ESTA corrida, que es
+      # el único registro de qué cambió y desde qué valor.
+      - name: Guardar el reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-report-${{ github.run_number }}
+          path: repo/data/ground_truth_backfill_report.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Summary
+        if: always()
+        working-directory: repo
+        run: |
+          echo "## Ground Truth Backfill" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "**DRY RUN** — no se escribió nada y no se recalcularon scores." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Aplicado, con \`--task scores\` encadenado." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          python3 - <<'PYEOF' >> $GITHUB_STEP_SUMMARY || echo "_(sin reporte)_"
+          import json
+          d = json.load(open("data/ground_truth_backfill_report.json"))
+          print(f"- **Ingredientes revisados**: {d['ingredientes_revisados']:,}")
+          print(f"- **Filas a corregir**: {d['filas_a_corregir']:,}\n")
+          print("| Campo | Filas |\n|---|---:|")
+          for k, v in d["cambios_por_campo"].items():
+              if v:
+                  print(f"| `{k}` | {v:,} |")
+          ed = d.get("endocrine_disruptor_por_motivo", {})
+          if ed:
+              print(f"\n**Disruptores** — {ed.get('lista', 0):,} con valor de la lista curada, "
+                    f"{ed.get('borrado', 0):,} limpiados por no tener respaldo regulatorio.")
+          c = d.get("candidatos_ed_a_revisar", {})
+          if c:
+              print(f"\n{sum(len(v) for v in c.values()):,} candidatos a revisar a mano "
+                    f"en {len(c)} patrones — no se escriben.")
+          PYEOF
