@@ -1,0 +1,66 @@
+name: Dedupe Audit
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # semanal, lunes 6am UTC
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: 'Notificar a las founders si hay grupos sin decidir'
+        type: boolean
+        default: true
+
+# Solo REPORTE: corre `dedupe_audit --dry-run`, así que no escribe en products_cache.
+# La tarea también sabe homologar marcas y recortar la marca del nombre, pero esa parte
+# no se automatiza: el dry-run del 16-09 proponía `L’ORÉAL PARIS HAIR EXPERTISE…` →
+# `PARIS HAIR EXPERTISE…`. Las fusiones tampoco: se deciden a mano sobre el reporte
+# (data/dedupe_decisiones.json) y las aplica `--task dedupe_merge`.
+#
+# Semanal y no diaria: pipeline.yml da de alta productos cada 3 días, y desde
+# incilab-enrich#38 las altas ya no crean la gemela del tier `exacto`, que era el 90% de
+# lo que aparecía. Cada corrida baja el catálogo activo con inci_list (~15 MB de egress).
+#
+# Independiente del resto: no toca data/ ni necesita grupo de concurrencia.
+permissions:
+  contents: read
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  dedupe_audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Clone private repo
+        run: git clone https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/CamiLara/incilab-enrich.git repo
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        working-directory: repo
+        run: pip install -r requirements.txt
+
+      - name: Strip newlines from secrets
+        run: |
+          echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+
+      # En los runs programados `inputs.notify` viene vacío: se notifica salvo que un
+      # dispatch manual lo apague explícitamente.
+      - name: dedupe_audit (solo reporte)
+        working-directory: repo
+        run: python3 incilab_seed.py --task dedupe_audit --dry-run ${{ inputs.notify != false && '--notify' || '' }}
+
+      - name: Subir reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dedupe-audit-report
+          path: repo/data/dedupe_audit_report.json
+          if-no-files-found: ignore
+          retention-days: 30

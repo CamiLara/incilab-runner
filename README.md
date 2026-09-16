@@ -13,6 +13,7 @@ GitHub Actions runner for the InciLab data pipeline.
 | `enrich-full.yml` | 1st Sunday/month | Automatic + manual | Full ingredient regeneration from CosIng via LLM |
 | `brands.yml` | Weekly (Sun 5am) | Automatic + manual | Scrape Jolse + Stylevana brand directories, upsert into `brands` table |
 | `image_audit.yml` | Daily (5am) | Automatic + manual | OCR + vision check that each product image matches its label; empties confirmed mismatches |
+| `dedupe_audit.yml` | Weekly (Mon 6am) | Automatic + manual | Report-only duplicate audit (`dedupe_audit --dry-run --notify`): table in the run summary, JSON as artifact, notification to founders if there are undecided groups. Writes nothing |
 | `ground-truth-backfill.yml` | On demand | Manual only | Applies `data/ground_truth.json` to rows already in `ingredients`, then chains `--task scores`. Input: `dry_run` (default true) |
 
 ## How it works
@@ -74,7 +75,7 @@ the `incilab-enrich-writes` group, for two different reasons:
   `ingredients` table, which is the same table `ingredients.yml` enriches daily. Before Aug 2026
   it had no group and its Sunday 2am run overlapped the daily 3am one.
 
-`brands.yml`, `image_audit.yml`, `categories.yml` and `rescore.yml` are deliberately outside the
+`brands.yml`, `image_audit.yml`, `dedupe_audit.yml`, `categories.yml` and `rescore.yml` are deliberately outside the
 group — they touch neither `data/` state nor the `ingredients` table. See the comments at the top
 of each file.
 
