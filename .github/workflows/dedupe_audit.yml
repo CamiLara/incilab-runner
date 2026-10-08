@@ -27,6 +27,8 @@ permissions:
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  # La tarea no usa LLM, pero incilab_seed.py corta al arrancar si falta esta clave.
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
   PYTHONUNBUFFERED: "1"
 
 jobs:
@@ -49,6 +51,7 @@ jobs:
         run: |
           echo "SUPABASE_URL=$(printenv SUPABASE_URL | tr -d '\n\r')" >> $GITHUB_ENV
           echo "SUPABASE_SERVICE_KEY=$(printenv SUPABASE_SERVICE_KEY | tr -d '\n\r')" >> $GITHUB_ENV
+          echo "OPENROUTER_API_KEY=$(printenv OPENROUTER_API_KEY | tr -d '\n\r')" >> $GITHUB_ENV
 
       # En los runs programados `inputs.notify` viene vacío: se notifica salvo que un
       # dispatch manual lo apague explícitamente.
